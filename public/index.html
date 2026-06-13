@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#10281f">
+  <title>Declare - Online Card Game</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="grain"></div>
+  <header class="site-header">
+    <a class="brand" href="/" aria-label="Declare home">
+      <span class="brand-mark">D</span>
+      <span>DECLARE</span>
+    </a>
+    <button class="text-button" id="rulesButton">How to play</button>
+  </header>
+
+  <main>
+    <section id="homeScreen" class="screen home-screen">
+      <div class="hero-copy">
+        <p class="eyebrow">The low-score card game</p>
+        <h1>Read the table.<br><em>Risk the declare.</em></h1>
+        <p class="hero-description">Shed cards, connect combinations, and call the lowest hand before someone catches you.</p>
+        <div class="feature-row">
+          <span>2-6 players</span>
+          <span>Private rooms</span>
+          <span>Live play</span>
+        </div>
+      </div>
+
+      <div class="entry-card">
+        <div class="entry-tabs" role="tablist">
+          <button class="tab active" data-tab="create">Create room</button>
+          <button class="tab" data-tab="join">Join room</button>
+        </div>
+
+        <form id="createForm" class="entry-form">
+          <label>Your name<input name="name" maxlength="20" required autocomplete="name" placeholder="Card sharp"></label>
+          <div class="field-pair">
+            <label>Seats<select name="maxPlayers"><option>2</option><option>3</option><option selected>4</option><option>5</option><option>6</option></select></label>
+            <label>Point limit<input name="pointLimit" type="number" min="50" max="200" value="100" required></label>
+          </div>
+          <label class="check-row"><input name="reentryEnabled" type="checkbox" checked><span>Allow one re-entry</span></label>
+          <button class="primary-button" type="submit">Create private room</button>
+        </form>
+
+        <form id="joinForm" class="entry-form hidden">
+          <label>Your name<input name="name" maxlength="20" required autocomplete="name" placeholder="Card sharp"></label>
+          <label>Room code<input class="code-input" name="roomCode" maxlength="6" required autocomplete="off" placeholder="ABC123"></label>
+          <button class="primary-button" type="submit">Join table</button>
+        </form>
+        <p id="homeError" class="form-error" role="alert"></p>
+      </div>
+    </section>
+
+    <section id="lobbyScreen" class="screen lobby-screen hidden">
+      <div class="lobby-card">
+        <p class="eyebrow">Private table</p>
+        <h2>Gather your players</h2>
+        <p>Share this room code. The game begins when the host starts the table.</p>
+        <button id="copyCode" class="room-code" title="Copy room code">
+          <span id="roomCode"></span><small>Copy code</small>
+        </button>
+        <div id="lobbyPlayers" class="lobby-players"></div>
+        <div class="lobby-footer">
+          <p id="lobbySettings"></p>
+          <button id="startButton" class="primary-button">Start game</button>
+          <p id="waitingText" class="waiting hidden">Waiting for the host to start...</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="gameScreen" class="game-screen hidden">
+      <div class="game-topbar">
+        <div><span class="eyebrow">Room <b id="gameRoomCode"></b></span><h2>Round <span id="roundNumber">1</span></h2></div>
+        <div class="wild-chip">Wild rank <strong id="wildRank"></strong></div>
+        <div class="deck-count"><span id="deckCount"></span><small>cards left</small></div>
+      </div>
+
+      <div id="playersRail" class="players-rail"></div>
+
+      <div class="table">
+        <div class="felt-mark">DECLARE</div>
+        <section class="play-zone">
+          <div>
+            <p class="zone-label">Previous play</p>
+            <div id="availablePlay" class="card-row compact"></div>
+          </div>
+          <button id="drawButton" class="deck-button" aria-label="Draw from deck">
+            <span class="card-back"><i></i></span>
+            <strong>Draw</strong>
+          </button>
+        </section>
+        <p id="eventMessage" class="event-message"></p>
+      </div>
+
+      <section class="hand-panel">
+        <div class="hand-heading">
+          <div><p class="zone-label">Your hand</p><h3><span id="handPoints">0</span> points</h3></div>
+          <p id="turnPrompt" class="turn-prompt"></p>
+        </div>
+        <div id="handCards" class="card-row hand-row"></div>
+        <div class="action-bar">
+          <span id="selectionHint">Select cards to play</span>
+          <div>
+            <button id="declareButton" class="secondary-button">Declare</button>
+            <button id="playButton" class="primary-button">Play selected</button>
+            <button id="endTurnButton" class="primary-button">End turn</button>
+          </div>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <dialog id="rulesDialog">
+    <div class="dialog-header"><div><p class="eyebrow">Quick guide</p><h2>How to play</h2></div><button id="closeRules" class="close-button" aria-label="Close">×</button></div>
+    <div class="rules-grid">
+      <section><b>01</b><h3>Play</h3><p>Lay a single, a same-rank group, or a suited sequence of 3-4 cards.</p></section>
+      <section><b>02</b><h3>Pick up</h3><p>Draw one card from the deck or choose one card from the previous play.</p></section>
+      <section><b>03</b><h3>Connect</h3><p>Match linked ranks between plays to skip your pickup entirely.</p></section>
+      <section><b>04</b><h3>Declare</h3><p>After one full turn cycle, declare with 15 points or fewer. A lower opposing hand defeats you.</p></section>
+    </div>
+    <p class="rules-note">Lowest cumulative score survives. Reach the point limit and you are eliminated after your optional re-entry.</p>
+  </dialog>
+
+  <div id="toast" class="toast" role="status"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

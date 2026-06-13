@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: declare-online
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    numInstances: 1
+    autoDeployTrigger: commit
