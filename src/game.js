@@ -125,6 +125,11 @@ function nextActiveIndex(game, fromIndex) {
   return index;
 }
 
+function selectJokerRank(previousRank, random = Math.random) {
+  const choices = previousRank ? RANKS.filter((rank) => rank !== previousRank) : RANKS;
+  return choices[Math.floor(random() * choices.length)];
+}
+
 function createGame(players, settings = {}, random = Math.random) {
   if (players.length < 2 || players.length > 6) throw new Error("Declare requires 2-6 players.");
   const game = {
@@ -166,8 +171,7 @@ function startRound(game, previousEvent = "") {
   game.turnsCompleted = 0;
   game.phase = "play";
 
-  const wildCard = game.deck.find((card) => !card.naturalJoker);
-  game.wildRank = wildCard.rank;
+  game.wildRank = selectJokerRank(game.wildRank, game.random);
   for (const player of game.players) {
     player.hand = [];
     if (!player.eliminated) {
@@ -205,8 +209,10 @@ function playCards(game, playerId, cardIds) {
     finishRound(game, { type: "empty", playerIndex: game.currentPlayerIndex });
     return;
   }
-  game.phase = skipPickup ? "end" : "pickup";
-  if (skipPickup) game.lastEvent += " The play connected, so pickup was skipped.";
+  game.phase = skipPickup ? "optional-pickup" : "pickup";
+  if (skipPickup) {
+    game.lastEvent += " The play connected. They may end their turn or pick up from the previous play.";
+  }
 }
 
 function recycleDeck(game) {
@@ -222,31 +228,40 @@ function drawCard(game, playerId) {
   recycleDeck(game);
   if (game.deck.length === 0) throw new Error("There are no cards available to draw.");
   player.hand.push(game.deck.pop());
-  game.phase = "end";
   game.lastEvent = `${player.name} drew from the deck.`;
+  completeTurn(game);
 }
 
 function pickupCard(game, playerId, cardId) {
   const player = requireTurn(game, playerId);
-  if (game.phase !== "pickup") throw new Error("You cannot pick up now.");
+  if (game.phase !== "pickup" && game.phase !== "optional-pickup") {
+    throw new Error("You cannot pick up now.");
+  }
   const index = game.availablePlay.findIndex((card) => card.id === cardId);
   if (index < 0) throw new Error("That card is not available.");
   const [card] = game.availablePlay.splice(index, 1);
   player.hand.push(card);
-  game.phase = "end";
   game.lastEvent = `${player.name} picked up one card from the previous play.`;
+  completeTurn(game);
 }
 
 function endTurn(game, playerId) {
   requireTurn(game, playerId);
-  if (game.phase !== "end") throw new Error("Complete your play and pickup first.");
+  if (game.phase !== "optional-pickup") {
+    throw new Error("You may only end without picking up after a connected play.");
+  }
+  game.lastEvent = `${game.players[game.currentPlayerIndex].name} ended their turn without picking up.`;
+  completeTurn(game);
+}
+
+function completeTurn(game) {
   game.discard.push(...game.availablePlay);
   game.availablePlay = game.pendingPlay;
   game.pendingPlay = [];
   game.turnsCompleted += 1;
   game.currentPlayerIndex = nextActiveIndex(game, game.currentPlayerIndex);
   game.phase = "play";
-  game.lastEvent = `${game.players[game.currentPlayerIndex].name}'s turn.`;
+  game.lastEvent += ` ${game.players[game.currentPlayerIndex].name}'s turn.`;
 }
 
 function canDeclare(game, playerId) {
@@ -372,5 +387,6 @@ module.exports = {
   isValidPlay,
   playDescriptors,
   shouldSkipPickup,
-  recycleDeck
+  recycleDeck,
+  selectJokerRank
 };

@@ -39,7 +39,7 @@ Jokers may substitute for cards in groups or sequences, but a sequence cannot co
    - the cards played by the previous player. If multiple cards were played,
      the player chooses which one to take.
 3. The cards just played become available to the next player.
-4. End the turn.
+4. Picking up a card ends the turn immediately.
 
 If a player empties their hand, the round ends immediately. That player has a
 hand value of 0 and receives 0 points for the round. Every other active player
@@ -53,7 +53,9 @@ face up and available to the current player.
 
 ## Skipping the Pickup
 
-A player does not pick up a card when their play connects to the previous play:
+A player may end their turn without picking up when their play connects to the
+previous play. They may still choose to pick up one card from the previous play,
+but they cannot draw from the face-down deck:
 
 - Group to group: both have the same rank.
 - Group to sequence: the group's rank equals the sequence's lowest rank.

@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const {
   createGame,
   playCards,
+  drawCard,
   pickupCard,
   endTurn,
   declare,
@@ -66,7 +67,7 @@ test("recycles old played cards while preserving the top play", () => {
   assert.equal(game.availablePlay[0].rank, "4");
 });
 
-test("keeps the previous play available until the current player ends their turn", () => {
+test("keeps the previous play available until pickup completes the turn", () => {
   const game = createGame([
     { id: "one", name: "One" },
     { id: "two", name: "Two" }
@@ -84,11 +85,74 @@ test("keeps the previous play available until the current player ends their turn
 
   pickupCard(game, "one", previousCard.id);
   assert.equal(game.players[0].hand.some((item) => item.id === previousCard.id), true);
-  assert.equal(game.availablePlay.length, 0);
-
-  endTurn(game, "one");
   assert.deepEqual(game.availablePlay, [playedCard]);
   assert.equal(game.pendingPlay.length, 0);
+  assert.equal(game.currentPlayerIndex, 1);
+  assert.equal(game.phase, "play");
+});
+
+test("drawing from the deck ends the turn immediately", () => {
+  const game = createGame([
+    { id: "one", name: "One" },
+    { id: "two", name: "Two" }
+  ], {}, () => 0.5);
+  const playedCard = card("8");
+  game.availablePlay = [card("4")];
+  game.players[0].hand = [playedCard, card("K")];
+
+  playCards(game, "one", [playedCard.id]);
+  drawCard(game, "one");
+
+  assert.equal(game.currentPlayerIndex, 1);
+  assert.equal(game.phase, "play");
+  assert.deepEqual(game.availablePlay, [playedCard]);
+});
+
+test("a connected play can pick up from the board or end without drawing", () => {
+  const pickupGame = createGame([
+    { id: "one", name: "One" },
+    { id: "two", name: "Two" }
+  ], {}, () => 0.5);
+  const previousCard = card("6", "clubs");
+  const connectedCard = card("6", "hearts");
+  pickupGame.availablePlay = [previousCard];
+  pickupGame.players[0].hand = [connectedCard, card("K")];
+
+  playCards(pickupGame, "one", [connectedCard.id]);
+  assert.equal(pickupGame.phase, "optional-pickup");
+  pickupCard(pickupGame, "one", previousCard.id);
+  assert.equal(pickupGame.players[0].hand.some((item) => item.id === previousCard.id), true);
+  assert.equal(pickupGame.currentPlayerIndex, 1);
+
+  const skipGame = createGame([
+    { id: "one", name: "One" },
+    { id: "two", name: "Two" }
+  ], {}, () => 0.5);
+  const skipCard = card("6", "diamonds");
+  skipGame.availablePlay = [card("6", "spades")];
+  skipGame.players[0].hand = [skipCard, card("Q")];
+
+  playCards(skipGame, "one", [skipCard.id]);
+  endTurn(skipGame, "one");
+  assert.equal(skipGame.currentPlayerIndex, 1);
+  assert.deepEqual(skipGame.availablePlay, [skipCard]);
+});
+
+test("the joker rank changes every round", () => {
+  const game = createGame([
+    { id: "one", name: "One" },
+    { id: "two", name: "Two" }
+  ], {}, () => 0.5);
+  const firstJoker = game.wildRank;
+  const finalCard = card("2");
+  game.players[0].hand = [finalCard];
+  game.players[1].hand = [card("K")];
+  game.availablePlay = [card("7")];
+
+  playCards(game, "one", [finalCard.id]);
+
+  assert.equal(game.round, 2);
+  assert.notEqual(game.wildRank, firstJoker);
 });
 
 test("an empty hand scores zero while opponents score their remaining hands", () => {

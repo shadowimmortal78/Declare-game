@@ -102,7 +102,7 @@ function cardHtml(card, options = {}) {
       data-card-id="${card.id}" ${options.disabled ? "disabled" : ""}>
       <span class="corner">${card.naturalJoker ? "★" : card.rank}<i>${suitSymbols[card.suit]}</i></span>
       <span class="center-suit">${suitSymbols[card.suit]}</span>
-      ${wild ? '<small class="wild-label">WILD</small>' : ""}
+      ${wild ? '<small class="wild-label">JOKER</small>' : ""}
     </button>`;
 }
 
@@ -128,7 +128,8 @@ function renderGame() {
     </div>
   `).join("");
 
-  const canPickup = myTurn && game.phase === "pickup";
+  const canPickup = myTurn && (game.phase === "pickup" || game.phase === "optional-pickup");
+  const canDraw = myTurn && game.phase === "pickup";
   $("#availablePlay").innerHTML = game.availablePlay.length
     ? game.availablePlay.map((card) => cardHtml(card, { pickable: canPickup, disabled: !canPickup })).join("")
     : '<span class="empty-play">No cards remain in this play</span>';
@@ -159,16 +160,16 @@ function renderGame() {
     ? `${state.selectedCards.size} card${state.selectedCards.size === 1 ? "" : "s"} selected`
     : "Select cards to play";
 
-  $("#drawButton").disabled = !canPickup;
+  $("#drawButton").disabled = !canDraw;
   $("#declareButton").classList.toggle("hidden", !game.canDeclare);
   $("#playButton").classList.toggle("hidden", !myTurn || game.phase !== "play");
   $("#playButton").disabled = state.selectedCards.size === 0;
-  $("#endTurnButton").classList.toggle("hidden", !myTurn || game.phase !== "end");
+  $("#endTurnButton").classList.toggle("hidden", !myTurn || game.phase !== "optional-pickup");
 }
 
 function phasePrompt(phase) {
   if (phase === "pickup") return "Pick one card or draw";
-  if (phase === "end") return "Your pickup is complete";
+  if (phase === "optional-pickup") return "End your turn or pick up from the previous play";
   return "Your turn to play";
 }
 
@@ -178,7 +179,10 @@ async function action(name, payload = {}) {
       method: "POST",
       body: JSON.stringify({ token: state.token, ...payload })
     });
-    if (name === "play") state.selectedCards.clear();
+    if (name === "play") {
+      state.selectedCards.clear();
+      render();
+    }
   } catch (error) {
     toast(error.message);
   }
