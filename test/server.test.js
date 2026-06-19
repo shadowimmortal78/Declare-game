@@ -50,3 +50,45 @@ test("reports healthy for deployment monitoring", async (context) => {
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { status: "ok" });
 });
+
+test("quitting first sits a player out and a second press leaves the room", async (context) => {
+  rooms.clear();
+  const server = createServer().listen(0, "127.0.0.1");
+  await new Promise((resolve) => server.once("listening", resolve));
+  context.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address().port}`;
+
+  const host = await request(base, "/api/rooms", {
+    method: "POST",
+    body: JSON.stringify({ name: "Host", maxPlayers: 3 })
+  });
+  const guest = await request(base, `/api/rooms/${host.body.roomCode}/join`, {
+    method: "POST",
+    body: JSON.stringify({ name: "Guest" })
+  });
+  await request(base, `/api/rooms/${host.body.roomCode}/join`, {
+    method: "POST",
+    body: JSON.stringify({ name: "Third" })
+  });
+  await request(base, `/api/rooms/${host.body.roomCode}/start`, {
+    method: "POST",
+    body: JSON.stringify({ token: host.body.token })
+  });
+
+  const firstQuit = await request(base, `/api/rooms/${host.body.roomCode}/actions/quit`, {
+    method: "POST",
+    body: JSON.stringify({ token: guest.body.token })
+  });
+  assert.deepEqual(firstQuit.body, { leftRoom: false });
+  assert.equal(
+    rooms.get(host.body.roomCode).game.players.find((player) => player.id === guest.body.playerId).sittingOut,
+    true
+  );
+
+  const secondQuit = await request(base, `/api/rooms/${host.body.roomCode}/actions/quit`, {
+    method: "POST",
+    body: JSON.stringify({ token: guest.body.token })
+  });
+  assert.deepEqual(secondQuit.body, { leftRoom: true });
+  assert.equal(rooms.get(host.body.roomCode).players.some((player) => player.id === guest.body.playerId), false);
+});

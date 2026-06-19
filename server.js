@@ -11,12 +11,17 @@ const {
   pickupCard,
   endTurn,
   declare,
-  publicState
+  publicState,
+  advanceRound,
+  sitOutPlayer,
+  leavePlayer
 } = require("./src/game");
 
 const PUBLIC_DIR = path.join(__dirname, "public");
 const rooms = new Map();
 const streams = new Map();
+const roundTimers = new Map();
+const ROUND_TRANSITION_MS = 3600;
 
 function randomCode() {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -107,6 +112,16 @@ function broadcast(room) {
   }
 }
 
+function scheduleRoundAdvance(room) {
+  if (!room.game || room.game.phase !== "round-end" || room.game.status === "finished") return;
+  clearTimeout(roundTimers.get(room.code));
+  const timer = setTimeout(() => {
+    roundTimers.delete(room.code);
+    if (advanceRound(room.game)) broadcast(room);
+  }, ROUND_TRANSITION_MS);
+  roundTimers.set(room.code, timer);
+}
+
 function performAction(room, player, action, payload) {
   if (!room.game) throw new Error("The game has not started.");
   switch (action) {
@@ -128,6 +143,24 @@ function performAction(room, player, action, payload) {
     default:
       throw new Error("Unknown game action.");
   }
+  scheduleRoundAdvance(room);
+}
+
+function quitPlayer(room, player) {
+  if (!room.game) throw new Error("The game has not started.");
+  const gamePlayer = room.game.players.find((item) => item.id === player.id);
+  if (!gamePlayer) throw new Error("Player not found.");
+
+  if (!gamePlayer.sittingOut) {
+    sitOutPlayer(room.game, player.id);
+    scheduleRoundAdvance(room);
+    return { leftRoom: false };
+  }
+
+  leavePlayer(room.game, player.id);
+  room.players = room.players.filter((item) => item.id !== player.id);
+  if (room.hostId === player.id) room.hostId = room.players[0]?.id || null;
+  return { leftRoom: true };
 }
 
 async function handleApi(req, res, url) {
@@ -203,6 +236,11 @@ async function handleApi(req, res, url) {
     if (req.method === "POST" && parts[0] === "api" && parts[1] === "rooms" && parts[3] === "actions") {
       const body = await readJson(req);
       const { room, player } = getSession(parts[2], body.token);
+      if (parts[4] === "quit") {
+        const result = quitPlayer(room, player);
+        broadcast(room);
+        return json(res, 200, result);
+      }
       performAction(room, player, parts[4], body);
       broadcast(room);
       return json(res, 200, roomState(room, player));

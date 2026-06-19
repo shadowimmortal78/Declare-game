@@ -113,15 +113,17 @@ function shouldSkipPickup(previousCards, currentCards, wildRank) {
 function activePlayerIndexes(game) {
   return game.players
     .map((player, index) => ({ player, index }))
-    .filter(({ player }) => !player.eliminated)
+    .filter(({ player }) => !player.eliminated && !player.sittingOut && !player.left)
     .map(({ index }) => index);
 }
 
 function nextActiveIndex(game, fromIndex) {
+  const active = activePlayerIndexes(game);
+  if (active.length === 0) return -1;
   let index = fromIndex;
   do {
     index = (index + 1) % game.players.length;
-  } while (game.players[index].eliminated);
+  } while (game.players[index].eliminated || game.players[index].sittingOut || game.players[index].left);
   return index;
 }
 
@@ -143,7 +145,9 @@ function createGame(players, settings = {}, random = Math.random) {
       hand: [],
       score: 0,
       eliminated: false,
-      reentryUsed: false
+      reentryUsed: false,
+      sittingOut: false,
+      left: false
     })),
     startingPlayerIndex: 0,
     currentPlayerIndex: 0,
@@ -155,6 +159,10 @@ function createGame(players, settings = {}, random = Math.random) {
     pendingPlay: [],
     wildRank: null,
     lastEvent: "",
+    lastAction: null,
+    actionSequence: 0,
+    scoreHistory: [],
+    roundResult: null,
     winnerId: null,
     random
   };
@@ -170,11 +178,12 @@ function startRound(game, previousEvent = "") {
   game.pendingPlay = [];
   game.turnsCompleted = 0;
   game.phase = "play";
+  game.roundResult = null;
 
   game.wildRank = selectJokerRank(game.wildRank, game.random);
   for (const player of game.players) {
     player.hand = [];
-    if (!player.eliminated) {
+    if (!player.eliminated && !player.sittingOut && !player.left) {
       for (let count = 0; count < 7; count += 1) player.hand.push(game.deck.pop());
     }
   }
@@ -204,9 +213,15 @@ function playCards(game, playerId, cardIds) {
   game.pendingPlay = cards;
   player.hand = player.hand.filter((card) => !uniqueIds.has(card.id));
   game.lastEvent = `${player.name} played ${cards.length} card${cards.length === 1 ? "" : "s"}.`;
+  recordAction(game, "play", player.id, { cardIds: cards.map((card) => card.id), cards });
 
   if (player.hand.length === 0) {
-    finishRound(game, { type: "empty", playerIndex: game.currentPlayerIndex });
+    finishRound(game, {
+      type: "empty",
+      playerIndex: game.currentPlayerIndex,
+      winnerIndex: game.currentPlayerIndex,
+      title: `${player.name} emptied their hand`
+    });
     return;
   }
   game.phase = skipPickup ? "optional-pickup" : "pickup";
@@ -227,8 +242,10 @@ function drawCard(game, playerId) {
   if (game.phase !== "pickup") throw new Error("You cannot draw now.");
   recycleDeck(game);
   if (game.deck.length === 0) throw new Error("There are no cards available to draw.");
-  player.hand.push(game.deck.pop());
+  const card = game.deck.pop();
+  player.hand.push(card);
   game.lastEvent = `${player.name} drew from the deck.`;
+  recordAction(game, "draw", player.id, { cardIds: [card.id], source: "deck" });
   completeTurn(game);
 }
 
@@ -242,6 +259,7 @@ function pickupCard(game, playerId, cardId) {
   const [card] = game.availablePlay.splice(index, 1);
   player.hand.push(card);
   game.lastEvent = `${player.name} picked up one card from the previous play.`;
+  recordAction(game, "pickup", player.id, { cardIds: [card.id], cards: [card], source: "board" });
   completeTurn(game);
 }
 
@@ -262,6 +280,16 @@ function completeTurn(game) {
   game.currentPlayerIndex = nextActiveIndex(game, game.currentPlayerIndex);
   game.phase = "play";
   game.lastEvent += ` ${game.players[game.currentPlayerIndex].name}'s turn.`;
+}
+
+function recordAction(game, type, playerId, details = {}) {
+  game.actionSequence += 1;
+  game.lastAction = {
+    sequence: game.actionSequence,
+    type,
+    playerId,
+    ...details
+  };
 }
 
 function canDeclare(game, playerId) {
@@ -297,6 +325,13 @@ function declare(game, playerId) {
       }
     }
     game.lastEvent = `${declarer.name} declared successfully with ${declarerPoints} points.`;
+    finishRound(game, {
+      type: "declare",
+      scoresApplied: true,
+      winnerIndex: declarerIndex,
+      title: `${declarer.name} won the declaration`,
+      detail: `Declared with ${declarerPoints} points`
+    });
   } else {
     const challengerIndex = challengers[0].index;
     declarer.score += 30;
@@ -307,11 +342,18 @@ function declare(game, playerId) {
       }
     }
     game.lastEvent = `${game.players[challengerIndex].name} defeated ${declarer.name}'s declaration.`;
+    finishRound(game, {
+      type: "challenge",
+      scoresApplied: true,
+      winnerIndex: challengerIndex,
+      title: `${game.players[challengerIndex].name} won the challenge`,
+      detail: `${declarer.name} declared with ${declarerPoints} points`
+    });
   }
-  finishRound(game, { type: "declare", scoresApplied: true });
 }
 
 function finishRound(game, result) {
+  const scoresBefore = new Map(game.players.map((player) => [player.id, player.score]));
   if (!result.scoresApplied) {
     for (const index of activePlayerIndexes(game)) {
       game.players[index].score += handPoints(game.players[index].hand, game.wildRank);
@@ -336,11 +378,69 @@ function finishRound(game, result) {
     game.status = "finished";
     game.winnerId = active.length === 1 ? game.players[active[0]].id : null;
     if (active.length === 1) game.lastEvent += ` ${game.players[active[0]].name} wins the game.`;
-    return;
   }
 
-  game.startingPlayerIndex = nextActiveIndex(game, game.startingPlayerIndex);
+  const deltas = Object.fromEntries(game.players.map((player) => [
+    player.id,
+    player.score - scoresBefore.get(player.id)
+  ]));
+  const winner = Number.isInteger(result.winnerIndex) ? game.players[result.winnerIndex] : null;
+  const historyEntry = {
+    round: game.round,
+    type: result.type,
+    winnerId: winner?.id || null,
+    title: result.title || "Round complete",
+    detail: result.detail || "",
+    deltas,
+    totals: Object.fromEntries(game.players.map((player) => [player.id, player.score]))
+  };
+  game.scoreHistory.push(historyEntry);
+  game.roundResult = historyEntry;
+  game.phase = "round-end";
+  recordAction(game, "round-end", winner?.id || null, { result: historyEntry });
+}
+
+function advanceRound(game) {
+  if (game.phase !== "round-end" || game.status === "finished") return false;
+  const nextStarter = nextActiveIndex(game, game.startingPlayerIndex);
+  if (nextStarter < 0) return false;
+  game.startingPlayerIndex = nextStarter;
   startRound(game, game.lastEvent);
+  return true;
+}
+
+function sitOutPlayer(game, playerId) {
+  const playerIndex = game.players.findIndex((player) => player.id === playerId);
+  if (playerIndex < 0) throw new Error("Player not found.");
+  const player = game.players[playerIndex];
+  if (player.sittingOut || player.left) return;
+  player.sittingOut = true;
+  player.hand = [];
+  game.lastEvent = `${player.name} is sitting out.`;
+  recordAction(game, "sit-out", player.id);
+
+  const active = activePlayerIndexes(game);
+  if (active.length <= 1) {
+    game.status = "finished";
+    game.winnerId = active.length === 1 ? game.players[active[0]].id : null;
+    game.phase = "round-end";
+    return;
+  }
+  if (game.currentPlayerIndex === playerIndex) {
+    game.currentPlayerIndex = nextActiveIndex(game, playerIndex);
+    game.phase = "play";
+    game.pendingPlay = [];
+    game.lastEvent += ` ${game.players[game.currentPlayerIndex].name}'s turn.`;
+  }
+}
+
+function leavePlayer(game, playerId) {
+  const player = game.players.find((item) => item.id === playerId);
+  if (!player) return;
+  player.left = true;
+  player.sittingOut = true;
+  player.hand = [];
+  recordAction(game, "leave", player.id);
 }
 
 function publicState(game, viewerId) {
@@ -356,6 +456,9 @@ function publicState(game, viewerId) {
     deckCount: game.deck.length,
     availablePlay: game.availablePlay,
     lastEvent: game.lastEvent,
+    lastAction: game.lastAction,
+    scoreHistory: game.scoreHistory,
+    roundResult: game.roundResult,
     winnerId: game.winnerId,
     canDeclare: canDeclare(game, viewerId),
     players: game.players.map((player) => ({
@@ -365,6 +468,8 @@ function publicState(game, viewerId) {
       cardCount: player.hand.length,
       eliminated: player.eliminated,
       reentryUsed: player.reentryUsed,
+      sittingOut: player.sittingOut,
+      left: player.left,
       hand: player.id === viewerId ? player.hand : undefined,
       handPoints: player.id === viewerId ? handPoints(player.hand, game.wildRank) : undefined
     })),
@@ -388,5 +493,8 @@ module.exports = {
   playDescriptors,
   shouldSkipPickup,
   recycleDeck,
-  selectJokerRank
+  selectJokerRank,
+  advanceRound,
+  sitOutPlayer,
+  leavePlayer
 };

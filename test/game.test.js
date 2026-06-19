@@ -13,7 +13,9 @@ const {
   handPoints,
   isValidPlay,
   shouldSkipPickup,
-  recycleDeck
+  recycleDeck,
+  advanceRound,
+  sitOutPlayer
 } = require("../src/game");
 
 const card = (rank, suit = "hearts", naturalJoker = false) => ({
@@ -151,6 +153,9 @@ test("the joker rank changes every round", () => {
 
   playCards(game, "one", [finalCard.id]);
 
+  assert.equal(game.phase, "round-end");
+  assert.equal(game.roundResult.winnerId, "one");
+  advanceRound(game);
   assert.equal(game.round, 2);
   assert.notEqual(game.wildRank, firstJoker);
 });
@@ -169,6 +174,9 @@ test("an empty hand scores zero while opponents score their remaining hands", ()
 
   assert.equal(game.players[0].score, 0);
   assert.equal(game.players[1].score, 10);
+  assert.equal(game.scoreHistory[0].deltas.one, 0);
+  assert.equal(game.scoreHistory[0].deltas.two, 10);
+  advanceRound(game);
   assert.equal(game.round, 2);
 });
 
@@ -203,4 +211,18 @@ test("the lowest challenger defeats a declaration", () => {
   assert.equal(game.players[0].score, 30);
   assert.equal(game.players[1].score, -3);
   assert.equal(game.players[2].score, 8);
+});
+
+test("sitting out greys a player from future turns while preserving their seat", () => {
+  const game = createGame([
+    { id: "one", name: "One" },
+    { id: "two", name: "Two" },
+    { id: "three", name: "Three" }
+  ], {}, () => 0.5);
+
+  sitOutPlayer(game, "one");
+
+  assert.equal(game.players[0].sittingOut, true);
+  assert.equal(game.currentPlayerIndex, 1);
+  assert.equal(game.players[0].left, false);
 });
