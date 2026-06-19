@@ -147,6 +147,11 @@ input:focus, select:focus { border-color: var(--green-2); box-shadow: 0 0 0 3px 
   transition: filter .25s, opacity .25s, border-color .25s, box-shadow .25s; pointer-events: auto;
 }
 .table-seat.current-seat { border-color: var(--green-2); box-shadow: 0 0 0 2px rgba(99,201,149,.28), 0 0 26px rgba(99,201,149,.55), 0 10px 28px rgba(0,0,0,.42); }
+.table-seat.seat-reconnecting {
+  border-color: var(--gold); box-shadow: 0 0 0 2px rgba(227,182,83,.18), 0 0 24px rgba(227,182,83,.38), 0 10px 28px rgba(0,0,0,.42);
+  animation: reconnectPulse 1.25s ease-in-out infinite;
+}
+.table-seat.seat-reconnecting .seat-details span { color: var(--gold); }
 .table-seat.seat-out { opacity: .42; filter: grayscale(1); }
 .seat-avatar {
   position: relative; display: grid; place-items: center; width: 44px; height: 44px; border-radius: 50%;
@@ -286,6 +291,7 @@ dialog::backdrop { background: rgba(2,8,5,.78); backdrop-filter: blur(7px); }
 @keyframes pulse { 50% { opacity: .45; } }
 @keyframes cardGlow { 50% { box-shadow: 0 0 0 4px rgba(216,169,74,.28), 0 9px 18px rgba(0,0,0,.2); } }
 @keyframes avatarGlow { 50% { box-shadow: 0 0 0 5px rgba(99,201,149,.14), 0 0 22px rgba(99,201,149,.65); } }
+@keyframes reconnectPulse { 50% { opacity: .68; } }
 @keyframes flyCard {
   0% { transform: translate(var(--from-x), var(--from-y)) rotate(-8deg) scale(.85); opacity: 0; }
   15% { opacity: 1; }

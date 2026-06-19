@@ -8,7 +8,8 @@ const state = {
   selectedCards: new Set(),
   events: null,
   lastActionSequence: 0,
-  scoreOpen: false
+  scoreOpen: false,
+  reconnectTicker: null
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -128,6 +129,7 @@ function renderGame() {
   $("#eventMessage").classList.remove("connection-warning");
 
   renderSeats(game);
+  startReconnectTicker();
   renderScoreTable(game);
   renderRoundResult(game);
 
@@ -172,6 +174,20 @@ function renderGame() {
   $("#quitButton").classList.toggle("leave-ready", me.sittingOut);
 }
 
+function startReconnectTicker() {
+  const hasReconnect = state.data?.game?.players.some((player) => player.disconnectedUntil);
+  if (!hasReconnect) {
+    clearInterval(state.reconnectTicker);
+    state.reconnectTicker = null;
+    return;
+  }
+  if (state.reconnectTicker) return;
+  state.reconnectTicker = setInterval(() => {
+    if (!state.data?.game) return;
+    renderSeats(state.data.game);
+  }, 1000);
+}
+
 function renderSeats(game) {
   const visiblePlayers = game.players.filter((player) => !player.left);
   const viewerIndex = visiblePlayers.findIndex((player) => player.id === game.viewerId);
@@ -189,9 +205,19 @@ function renderSeats(game) {
     const x = 50 + Math.cos(radians) * horizontalRadius;
     const y = 50 + Math.sin(radians) * verticalRadius;
     const isOut = player.eliminated || player.sittingOut;
-    const stateLabel = player.eliminated ? "Out" : player.sittingOut ? "Sitting out" : `${player.cardCount} cards`;
+    const reconnectSeconds = player.disconnectedUntil
+      ? Math.max(0, Math.ceil((player.disconnectedUntil - Date.now()) / 1000))
+      : null;
+    const reconnecting = player.connected === false && reconnectSeconds !== null;
+    const stateLabel = player.eliminated
+      ? "Out"
+      : player.sittingOut
+        ? "Sitting out"
+        : reconnecting
+          ? `Reconnecting ${reconnectSeconds}s`
+          : `${player.cardCount} cards`;
     return `
-      <div class="table-seat ${player.id === game.currentPlayerId ? "current-seat" : ""} ${isOut ? "seat-out" : ""}"
+      <div class="table-seat ${player.id === game.currentPlayerId ? "current-seat" : ""} ${isOut ? "seat-out" : ""} ${reconnecting ? "seat-reconnecting" : ""}"
         data-player-id="${player.id}" style="--seat-x:${x}%;--seat-y:${y}%">
         <div class="seat-avatar">
           ${escapeHtml(player.name.slice(0, 1).toUpperCase())}
@@ -324,6 +350,8 @@ function returnHome() {
   state.data = null;
   state.selectedCards.clear();
   state.lastActionSequence = 0;
+  clearInterval(state.reconnectTicker);
+  state.reconnectTicker = null;
   clearSession();
   toggleScorePanel(false);
   showScreen("#homeScreen");

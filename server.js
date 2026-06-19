@@ -21,7 +21,10 @@ const PUBLIC_DIR = path.join(__dirname, "public");
 const rooms = new Map();
 const streams = new Map();
 const roundTimers = new Map();
+const disconnectTimers = new Map();
+const connectionCounts = new Map();
 const ROUND_TRANSITION_MS = 3600;
+const DISCONNECT_GRACE_MS = 35_000;
 
 function randomCode() {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -110,6 +113,54 @@ function broadcast(room) {
       listeners.delete(listener);
     }
   }
+}
+
+function connectionKey(room, player) {
+  return `${room.code}:${player.id}`;
+}
+
+function markPlayerConnected(room, player) {
+  const key = connectionKey(room, player);
+  connectionCounts.set(key, (connectionCounts.get(key) || 0) + 1);
+  clearTimeout(disconnectTimers.get(key));
+  disconnectTimers.delete(key);
+
+  const gamePlayer = room.game?.players.find((item) => item.id === player.id);
+  if (!gamePlayer || gamePlayer.left || gamePlayer.sittingOut) return;
+  const wasDisconnected = gamePlayer.connected === false;
+  gamePlayer.connected = true;
+  gamePlayer.disconnectedUntil = null;
+  if (wasDisconnected) {
+    room.game.lastEvent = `${gamePlayer.name} reconnected.`;
+    broadcast(room);
+  }
+}
+
+function markPlayerDisconnected(room, player, graceMs = DISCONNECT_GRACE_MS) {
+  const key = connectionKey(room, player);
+  const remainingConnections = Math.max(0, (connectionCounts.get(key) || 1) - 1);
+  if (remainingConnections > 0) {
+    connectionCounts.set(key, remainingConnections);
+    return;
+  }
+  connectionCounts.delete(key);
+
+  const gamePlayer = room.game?.players.find((item) => item.id === player.id);
+  if (!gamePlayer || gamePlayer.left || gamePlayer.sittingOut) return;
+  gamePlayer.connected = false;
+  gamePlayer.disconnectedUntil = Date.now() + graceMs;
+  room.game.lastEvent = `${gamePlayer.name} disconnected and has ${Math.ceil(graceMs / 1000)} seconds to reconnect.`;
+  broadcast(room);
+
+  clearTimeout(disconnectTimers.get(key));
+  disconnectTimers.set(key, setTimeout(() => {
+    disconnectTimers.delete(key);
+    const currentPlayer = room.game?.players.find((item) => item.id === player.id);
+    if (!currentPlayer || currentPlayer.connected !== false || currentPlayer.sittingOut || currentPlayer.left) return;
+    sitOutPlayer(room.game, player.id);
+    room.game.lastEvent = `${currentPlayer.name}'s reconnect grace period expired.`;
+    broadcast(room);
+  }, graceMs));
 }
 
 function scheduleRoundAdvance(room) {
@@ -214,8 +265,15 @@ async function handleApi(req, res, url) {
       const listener = { res, player };
       if (!streams.has(room.code)) streams.set(room.code, new Set());
       streams.get(room.code).add(listener);
+      markPlayerConnected(room, player);
       sendEvent(res, "state", roomState(room, player));
-      req.on("close", () => streams.get(room.code)?.delete(listener));
+      let closed = false;
+      req.on("close", () => {
+        if (closed) return;
+        closed = true;
+        streams.get(room.code)?.delete(listener);
+        markPlayerDisconnected(room, player, url.disconnectGraceMs);
+      });
       return;
     }
 
@@ -275,13 +333,17 @@ function serveStatic(res, pathname) {
   });
 }
 
-function createServer() {
+function createServer(options = {}) {
+  const disconnectGraceMs = options.disconnectGraceMs ?? DISCONNECT_GRACE_MS;
   return http.createServer((req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
     if (req.method === "GET" && url.pathname === "/health") {
       return json(res, 200, { status: "ok" });
     }
-    if (url.pathname.startsWith("/api/")) return handleApi(req, res, url);
+    if (url.pathname.startsWith("/api/")) {
+      url.disconnectGraceMs = disconnectGraceMs;
+      return handleApi(req, res, url);
+    }
     return serveStatic(res, url.pathname);
   });
 }

@@ -12,6 +12,8 @@ async function request(base, path, options = {}) {
   return { status: response.status, body: await response.json() };
 }
 
+const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
 test("creates, joins, and starts a private multiplayer room", async (context) => {
   rooms.clear();
   const server = createServer().listen(0, "127.0.0.1");
@@ -91,4 +93,57 @@ test("quitting first sits a player out and a second press leaves the room", asyn
   });
   assert.deepEqual(secondQuit.body, { leftRoom: true });
   assert.equal(rooms.get(host.body.roomCode).players.some((player) => player.id === guest.body.playerId), false);
+});
+
+test("preserves a disconnected seat for the reconnect grace period", async (context) => {
+  rooms.clear();
+  const server = createServer({ disconnectGraceMs: 80 }).listen(0, "127.0.0.1");
+  await new Promise((resolve) => server.once("listening", resolve));
+  context.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address().port}`;
+
+  const host = await request(base, "/api/rooms", {
+    method: "POST",
+    body: JSON.stringify({ name: "Host", maxPlayers: 3 })
+  });
+  await request(base, `/api/rooms/${host.body.roomCode}/join`, {
+    method: "POST",
+    body: JSON.stringify({ name: "Guest" })
+  });
+  await request(base, `/api/rooms/${host.body.roomCode}/join`, {
+    method: "POST",
+    body: JSON.stringify({ name: "Third" })
+  });
+  await request(base, `/api/rooms/${host.body.roomCode}/start`, {
+    method: "POST",
+    body: JSON.stringify({ token: host.body.token })
+  });
+
+  const room = rooms.get(host.body.roomCode);
+  const gamePlayer = room.game.players.find((player) => player.id === host.body.playerId);
+  const originalHandIds = gamePlayer.hand.map((card) => card.id);
+  const eventUrl = `${base}/api/rooms/${host.body.roomCode}/events?token=${host.body.token}`;
+
+  const firstStream = await fetch(eventUrl);
+  await firstStream.body.cancel();
+  await wait(15);
+
+  assert.equal(gamePlayer.connected, false);
+  assert.equal(gamePlayer.sittingOut, false);
+  assert.equal(room.game.currentPlayerIndex, 0);
+  assert.deepEqual(gamePlayer.hand.map((card) => card.id), originalHandIds);
+  assert.ok(gamePlayer.disconnectedUntil > Date.now());
+
+  const reconnectedStream = await fetch(eventUrl);
+  await wait(10);
+  assert.equal(gamePlayer.connected, true);
+  assert.equal(gamePlayer.disconnectedUntil, null);
+  assert.equal(gamePlayer.sittingOut, false);
+  assert.deepEqual(gamePlayer.hand.map((card) => card.id), originalHandIds);
+
+  await reconnectedStream.body.cancel();
+  await wait(100);
+  assert.equal(gamePlayer.sittingOut, true);
+  assert.equal(gamePlayer.disconnectedUntil, null);
+  assert.equal(room.game.currentPlayerIndex, 1);
 });

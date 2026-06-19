@@ -147,7 +147,9 @@ function createGame(players, settings = {}, random = Math.random) {
       eliminated: false,
       reentryUsed: false,
       sittingOut: false,
-      left: false
+      left: false,
+      connected: true,
+      disconnectedUntil: null
     })),
     startingPlayerIndex: 0,
     currentPlayerIndex: 0,
@@ -415,6 +417,8 @@ function sitOutPlayer(game, playerId) {
   const player = game.players[playerIndex];
   if (player.sittingOut || player.left) return;
   player.sittingOut = true;
+  player.connected = false;
+  player.disconnectedUntil = null;
   player.hand = [];
   game.lastEvent = `${player.name} is sitting out.`;
   recordAction(game, "sit-out", player.id);
@@ -439,6 +443,8 @@ function leavePlayer(game, playerId) {
   if (!player) return;
   player.left = true;
   player.sittingOut = true;
+  player.connected = false;
+  player.disconnectedUntil = null;
   player.hand = [];
   recordAction(game, "leave", player.id);
 }
@@ -470,6 +476,8 @@ function publicState(game, viewerId) {
       reentryUsed: player.reentryUsed,
       sittingOut: player.sittingOut,
       left: player.left,
+      connected: player.connected !== false,
+      disconnectedUntil: player.disconnectedUntil,
       hand: player.id === viewerId ? player.hand : undefined,
       handPoints: player.id === viewerId ? handPoints(player.hand, game.wildRank) : undefined
     })),
