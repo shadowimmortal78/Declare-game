@@ -43,6 +43,90 @@ test("creates, joins, and starts a private multiplayer room", async (context) =>
   assert.equal(started.body.game.players[1].hand, undefined);
 });
 
+test("the host can rematch with the same room and updated settings", async (context) => {
+  rooms.clear();
+  const server = createServer().listen(0, "127.0.0.1");
+  await new Promise((resolve) => server.once("listening", resolve));
+  context.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address().port}`;
+
+  const host = await request(base, "/api/rooms", {
+    method: "POST",
+    body: JSON.stringify({ name: "Host", maxPlayers: 3, pointLimit: 100, reentryEnabled: true })
+  });
+  const guest = await request(base, `/api/rooms/${host.body.roomCode}/join`, {
+    method: "POST",
+    body: JSON.stringify({ name: "Guest" })
+  });
+  await request(base, `/api/rooms/${host.body.roomCode}/start`, {
+    method: "POST",
+    body: JSON.stringify({ token: host.body.token })
+  });
+
+  const room = rooms.get(host.body.roomCode);
+  room.game.status = "finished";
+  room.game.winnerId = host.body.playerId;
+  room.game.players[0].score = 42;
+  room.game.players[1].score = 67;
+  room.game.players[1].sittingOut = true;
+
+  const rematch = await request(base, `/api/rooms/${host.body.roomCode}/rematch`, {
+    method: "POST",
+    body: JSON.stringify({
+      token: host.body.token,
+      pointLimit: 150,
+      reentryEnabled: false
+    })
+  });
+
+  assert.equal(rematch.status, 200);
+  assert.equal(rematch.body.roomCode, host.body.roomCode);
+  assert.equal(rematch.body.game.status, "playing");
+  assert.equal(rematch.body.game.round, 1);
+  assert.equal(rematch.body.game.pointLimit, 150);
+  assert.equal(rematch.body.game.reentryEnabled, false);
+  assert.deepEqual(rematch.body.game.players.map((player) => player.id), [
+    host.body.playerId,
+    guest.body.playerId
+  ]);
+  assert.deepEqual(rematch.body.game.players.map((player) => player.score), [0, 0]);
+  assert.deepEqual(rematch.body.game.players.map((player) => player.sittingOut), [false, false]);
+  assert.equal(rematch.body.game.players[0].hand.length, 7);
+  assert.equal(room.pointLimit, 150);
+  assert.equal(room.reentryEnabled, false);
+});
+
+test("only the host can start a rematch after the game finishes", async (context) => {
+  rooms.clear();
+  const server = createServer().listen(0, "127.0.0.1");
+  await new Promise((resolve) => server.once("listening", resolve));
+  context.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address().port}`;
+
+  const host = await request(base, "/api/rooms", {
+    method: "POST",
+    body: JSON.stringify({ name: "Host", maxPlayers: 2 })
+  });
+  const guest = await request(base, `/api/rooms/${host.body.roomCode}/join`, {
+    method: "POST",
+    body: JSON.stringify({ name: "Guest" })
+  });
+  await request(base, `/api/rooms/${host.body.roomCode}/start`, {
+    method: "POST",
+    body: JSON.stringify({ token: host.body.token })
+  });
+  rooms.get(host.body.roomCode).game.status = "finished";
+
+  const rematch = await request(base, `/api/rooms/${host.body.roomCode}/rematch`, {
+    method: "POST",
+    body: JSON.stringify({ token: guest.body.token, pointLimit: 100, reentryEnabled: true })
+  });
+
+  assert.equal(rematch.status, 400);
+  assert.equal(rematch.body.error, "Only the host can start a rematch.");
+  assert.equal(rooms.get(host.body.roomCode).game.status, "finished");
+});
+
 test("reports healthy for deployment monitoring", async (context) => {
   const server = createServer().listen(0, "127.0.0.1");
   await new Promise((resolve) => server.once("listening", resolve));

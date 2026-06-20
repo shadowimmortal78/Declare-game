@@ -9,7 +9,10 @@ const state = {
   events: null,
   lastActionSequence: 0,
   scoreOpen: false,
-  reconnectTicker: null
+  reconnectTicker: null,
+  feedbackEnabled: localStorage.getItem("declare-feedback-enabled") !== "false",
+  audioContext: null,
+  hasReceivedState: false
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -55,12 +58,27 @@ function connect() {
   state.events = new EventSource(`/api/rooms/${state.roomCode}/events?token=${encodeURIComponent(state.token)}`);
   state.events.addEventListener("state", (event) => {
     const nextData = JSON.parse(event.data);
+    const previousData = state.data;
+    const isRematch = previousData?.game?.status === "finished"
+      && nextData.game?.status === "playing"
+      && nextData.game.round === 1;
+    if (isRematch) {
+      state.selectedCards.clear();
+      state.lastActionSequence = 0;
+    }
     const action = nextData.game?.lastAction;
-    const shouldAnimate = action && action.sequence > state.lastActionSequence;
+    const isNewAction = state.hasReceivedState && action && action.sequence > state.lastActionSequence;
     state.data = nextData;
     render();
     if (action) state.lastActionSequence = Math.max(state.lastActionSequence, action.sequence);
-    if (shouldAnimate) requestAnimationFrame(() => animateAction(action));
+    if (isNewAction) {
+      requestAnimationFrame(() => animateAction(action));
+      playActionFeedback(action);
+    }
+    if (state.hasReceivedState && previousData?.game?.currentPlayerId !== nextData.game?.currentPlayerId) {
+      playTurnFeedback(nextData.game?.currentPlayerId === nextData.game?.viewerId);
+    }
+    state.hasReceivedState = true;
   });
   state.events.onerror = () => {
     $("#eventMessage")?.classList.add("connection-warning");
@@ -132,6 +150,7 @@ function renderGame() {
   startReconnectTicker();
   renderScoreTable(game);
   renderRoundResult(game);
+  renderRematch(game);
 
   const canPickup = myTurn && (game.phase === "pickup" || game.phase === "optional-pickup");
   const canDraw = myTurn && game.phase === "pickup";
@@ -172,6 +191,94 @@ function renderGame() {
   $("#endTurnButton").classList.toggle("hidden", !myTurn || game.phase !== "optional-pickup");
   $("#quitButton").textContent = me.sittingOut ? "Leave room" : "Quit";
   $("#quitButton").classList.toggle("leave-ready", me.sittingOut);
+  renderFeedbackButton();
+}
+
+function renderFeedbackButton() {
+  $("#feedbackButton").setAttribute("aria-pressed", String(state.feedbackEnabled));
+  $("#feedbackButton").classList.toggle("feedback-muted", !state.feedbackEnabled);
+  $("#feedbackIcon").textContent = state.feedbackEnabled ? "♪" : "×";
+  $("#feedbackLabel").textContent = state.feedbackEnabled ? "Sound on" : "Muted";
+}
+
+function ensureAudioContext() {
+  if (!state.feedbackEnabled) return null;
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) return null;
+  if (!state.audioContext) state.audioContext = new AudioContextClass();
+  if (state.audioContext.state === "suspended") state.audioContext.resume();
+  return state.audioContext;
+}
+
+function playTone(frequency, duration = 0.08, volume = 0.022, delay = 0, type = "sine") {
+  const context = ensureAudioContext();
+  if (!context) return;
+  const start = context.currentTime + delay;
+  const oscillator = context.createOscillator();
+  const gain = context.createGain();
+  oscillator.type = type;
+  oscillator.frequency.setValueAtTime(frequency, start);
+  gain.gain.setValueAtTime(0.0001, start);
+  gain.gain.exponentialRampToValueAtTime(volume, start + 0.012);
+  gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+  oscillator.connect(gain);
+  gain.connect(context.destination);
+  oscillator.start(start);
+  oscillator.stop(start + duration + 0.02);
+}
+
+function vibrate(pattern) {
+  if (state.feedbackEnabled && navigator.vibrate) navigator.vibrate(pattern);
+}
+
+function playActionFeedback(action) {
+  if (!state.feedbackEnabled || !action) return;
+  if (action.type === "play") {
+    playTone(235, 0.07, 0.018, 0, "triangle");
+    playTone(285, 0.06, 0.014, 0.045, "triangle");
+    vibrate(12);
+    return;
+  }
+  if (action.type === "pickup" || action.type === "draw") {
+    playTone(action.type === "draw" ? 185 : 210, 0.07, 0.015, 0, "sine");
+    vibrate(9);
+    return;
+  }
+  if (action.type === "round-end") {
+    const resultType = action.result?.type;
+    if (resultType === "challenge") {
+      playTone(330, 0.11, 0.022, 0, "triangle");
+      playTone(220, 0.16, 0.025, 0.09, "triangle");
+      vibrate([18, 35, 24]);
+    } else {
+      playTone(330, 0.1, 0.02, 0, "sine");
+      playTone(440, 0.12, 0.022, 0.08, "sine");
+      playTone(550, 0.15, 0.024, 0.17, "sine");
+      vibrate([14, 30, 14]);
+    }
+  }
+}
+
+function playTurnFeedback(isViewerTurn) {
+  if (!state.feedbackEnabled) return;
+  if (isViewerTurn) {
+    playTone(420, 0.08, 0.018, 0.1, "sine");
+    playTone(560, 0.11, 0.019, 0.17, "sine");
+    vibrate([12, 26, 12]);
+  } else {
+    playTone(300, 0.055, 0.01, 0.08, "sine");
+  }
+}
+
+function toggleFeedback() {
+  state.feedbackEnabled = !state.feedbackEnabled;
+  localStorage.setItem("declare-feedback-enabled", String(state.feedbackEnabled));
+  if (state.feedbackEnabled) {
+    ensureAudioContext();
+    playTone(430, 0.07, 0.016);
+    vibrate(8);
+  }
+  renderFeedbackButton();
 }
 
 function startReconnectTicker() {
@@ -261,7 +368,7 @@ function renderScoreTable(game) {
 
 function renderRoundResult(game) {
   const overlay = $("#roundResultOverlay");
-  if (game.phase !== "round-end" || !game.roundResult) {
+  if (game.status === "finished" || game.phase !== "round-end" || !game.roundResult) {
     overlay.classList.add("hidden");
     return;
   }
@@ -275,6 +382,31 @@ function renderRoundResult(game) {
       const delta = game.roundResult.deltas[player.id] || 0;
       return `<span><b>${escapeHtml(player.name)}</b><em>${delta > 0 ? "+" : ""}${delta}</em></span>`;
     }).join("");
+  overlay.classList.remove("hidden");
+}
+
+function renderRematch(game) {
+  const overlay = $("#rematchOverlay");
+  if (game.status !== "finished") {
+    overlay.classList.add("hidden");
+    return;
+  }
+
+  const wasHidden = overlay.classList.contains("hidden");
+  const winner = game.players.find((player) => player.id === game.winnerId);
+  const isHost = state.data.hostId === game.viewerId;
+  $("#rematchWinnerIcon").textContent = winner?.name.slice(0, 1).toUpperCase() || "D";
+  $("#rematchTitle").textContent = winner ? `${winner.name} wins the game` : "Game over";
+  $("#rematchDetail").textContent = isHost
+    ? "Choose the settings for another game with everyone still in this room."
+    : "The host can restart the room with new game settings.";
+  $("#rematchForm").classList.toggle("hidden", !isHost);
+  $("#rematchWaiting").classList.toggle("hidden", isHost);
+  if (wasHidden) {
+    $("#rematchPointLimit").value = game.pointLimit;
+    $("#rematchReentry").checked = game.reentryEnabled;
+    $("#rematchError").textContent = "";
+  }
   overlay.classList.remove("hidden");
 }
 
@@ -350,6 +482,7 @@ function returnHome() {
   state.data = null;
   state.selectedCards.clear();
   state.lastActionSequence = 0;
+  state.hasReceivedState = false;
   clearInterval(state.reconnectTicker);
   state.reconnectTicker = null;
   clearSession();
@@ -430,6 +563,28 @@ $("#startButton").addEventListener("click", async () => {
   }
 });
 
+$("#rematchForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  const submitButton = event.currentTarget.querySelector('button[type="submit"]');
+  submitButton.disabled = true;
+  $("#rematchError").textContent = "";
+  try {
+    await api(`/api/rooms/${state.roomCode}/rematch`, {
+      method: "POST",
+      body: JSON.stringify({
+        token: state.token,
+        pointLimit: Number(form.get("pointLimit")),
+        reentryEnabled: form.get("reentryEnabled") === "on"
+      })
+    });
+  } catch (error) {
+    $("#rematchError").textContent = error.message;
+  } finally {
+    submitButton.disabled = false;
+  }
+});
+
 $("#copyCode").addEventListener("click", async () => {
   await navigator.clipboard.writeText(state.roomCode);
   toast("Room code copied");
@@ -439,6 +594,7 @@ $("#playButton").addEventListener("click", () => action("play", { cardIds: [...s
 $("#endTurnButton").addEventListener("click", () => action("end-turn"));
 $("#declareButton").addEventListener("click", () => action("declare"));
 $("#scoreButton").addEventListener("click", () => toggleScorePanel());
+$("#feedbackButton").addEventListener("click", toggleFeedback);
 $("#closeScorePanel").addEventListener("click", () => toggleScorePanel(false));
 $("#scoreBackdrop").addEventListener("click", () => toggleScorePanel(false));
 $("#quitButton").addEventListener("click", handleQuit);
@@ -462,6 +618,10 @@ document.addEventListener("keydown", (event) => {
 window.addEventListener("resize", () => {
   if (state.data?.game) renderGame();
 });
+
+document.addEventListener("pointerdown", () => {
+  if (state.feedbackEnabled) ensureAudioContext();
+}, { once: true });
 
 (async function restoreSession() {
   try {

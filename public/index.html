@@ -79,6 +79,10 @@
       <div class="game-topbar">
         <div class="game-tools">
           <button id="scoreButton" class="table-tool" title="Round points (M)">Points <kbd>M</kbd></button>
+          <button id="feedbackButton" class="table-tool feedback-tool" aria-pressed="true" title="Sound and vibration">
+            <span id="feedbackIcon" aria-hidden="true">♪</span>
+            <span id="feedbackLabel">Sound on</span>
+          </button>
           <button id="quitButton" class="table-tool danger-tool">Quit</button>
         </div>
         <div class="round-heading"><span class="eyebrow">Room <b id="gameRoomCode"></b></span><h2>Round <span id="roundNumber">1</span></h2></div>
@@ -141,6 +145,26 @@
       <p id="roundResultDetail"></p>
       <div id="roundResultScores" class="result-scores"></div>
       <small>Next round is being dealt...</small>
+    </div>
+  </div>
+
+  <div id="rematchOverlay" class="round-result-overlay rematch-overlay hidden" aria-live="assertive">
+    <div class="result-rays"></div>
+    <div class="round-result-card rematch-card">
+      <p class="eyebrow">Game complete</p>
+      <div id="rematchWinnerIcon" class="result-icon">D</div>
+      <h2 id="rematchTitle">Game over</h2>
+      <p id="rematchDetail"></p>
+      <form id="rematchForm" class="rematch-form">
+        <div class="field-pair">
+          <label>Point limit<input id="rematchPointLimit" name="pointLimit" type="number" min="50" max="200" required></label>
+          <label class="check-row rematch-check"><input id="rematchReentry" name="reentryEnabled" type="checkbox"><span>Allow one re-entry</span></label>
+        </div>
+        <button class="primary-button" type="submit">Start rematch</button>
+        <p id="rematchError" class="form-error" role="alert"></p>
+      </form>
+      <p id="rematchWaiting" class="waiting hidden">Waiting for the host to set up the rematch...</p>
+      <small>Same room, same players, fresh scores.</small>
     </div>
   </div>
 

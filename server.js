@@ -173,6 +173,27 @@ function scheduleRoundAdvance(room) {
   roundTimers.set(room.code, timer);
 }
 
+function startRematch(room, settings) {
+  const previousPlayers = new Map(room.game.players.map((player) => [player.id, player]));
+  room.pointLimit = Math.min(200, Math.max(50, Number(settings.pointLimit) || room.pointLimit));
+  room.reentryEnabled = settings.reentryEnabled !== false;
+  room.game = createGame(room.players, {
+    pointLimit: room.pointLimit,
+    reentryEnabled: room.reentryEnabled
+  });
+
+  for (const player of room.game.players) {
+    const previousPlayer = previousPlayers.get(player.id);
+    if (previousPlayer?.connected === false && previousPlayer.disconnectedUntil > Date.now()) {
+      player.connected = false;
+      player.disconnectedUntil = previousPlayer.disconnectedUntil;
+    }
+  }
+
+  clearTimeout(roundTimers.get(room.code));
+  roundTimers.delete(room.code);
+}
+
 function performAction(room, player, action, payload) {
   if (!room.game) throw new Error("The game has not started.");
   switch (action) {
@@ -286,6 +307,20 @@ async function handleApi(req, res, url) {
       room.game = createGame(room.players, {
         pointLimit: room.pointLimit,
         reentryEnabled: room.reentryEnabled
+      });
+      broadcast(room);
+      return json(res, 200, roomState(room, player));
+    }
+
+    if (req.method === "POST" && parts[0] === "api" && parts[1] === "rooms" && parts[3] === "rematch") {
+      const body = await readJson(req);
+      const { room, player } = getSession(parts[2], body.token);
+      if (player.id !== room.hostId) throw new Error("Only the host can start a rematch.");
+      if (!room.game || room.game.status !== "finished") throw new Error("The current game has not finished.");
+      if (room.players.length < 2) throw new Error("At least two players are required.");
+      startRematch(room, {
+        pointLimit: body.pointLimit,
+        reentryEnabled: body.reentryEnabled
       });
       broadcast(room);
       return json(res, 200, roomState(room, player));
