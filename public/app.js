@@ -10,6 +10,9 @@ const state = {
   lastActionSequence: 0,
   scoreOpen: false,
   reconnectTicker: null,
+  turnTicker: null,
+  boardDisplay: [],
+  boardRevealTimer: null,
   feedbackEnabled: localStorage.getItem("declare-feedback-enabled") !== "false",
   audioContext: null,
   hasReceivedState: false
@@ -68,12 +71,24 @@ function connect() {
     }
     const action = nextData.game?.lastAction;
     const isNewAction = state.hasReceivedState && action && action.sequence > state.lastActionSequence;
+    const revealAfterAnimation = isNewAction &&
+      action.type === "play" &&
+      action.playerId !== nextData.game?.viewerId;
+    const nextBoardDisplay = nextData.game?.availablePlay || [];
+    clearTimeout(state.boardRevealTimer);
+    if (!revealAfterAnimation) state.boardDisplay = nextBoardDisplay;
     state.data = nextData;
     render();
     if (action) state.lastActionSequence = Math.max(state.lastActionSequence, action.sequence);
     if (isNewAction) {
       requestAnimationFrame(() => animateAction(action));
       playActionFeedback(action);
+    }
+    if (revealAfterAnimation) {
+      state.boardRevealTimer = setTimeout(() => {
+        state.boardDisplay = nextBoardDisplay;
+        renderBoard(state.data.game);
+      }, 700);
     }
     if (state.hasReceivedState && previousData?.game?.currentPlayerId !== nextData.game?.currentPlayerId) {
       playTurnFeedback(nextData.game?.currentPlayerId === nextData.game?.viewerId);
@@ -148,18 +163,14 @@ function renderGame() {
 
   renderSeats(game);
   startReconnectTicker();
+  startTurnTicker();
   renderScoreTable(game);
   renderRoundResult(game);
   renderRematch(game);
 
   const canPickup = myTurn && (game.phase === "pickup" || game.phase === "optional-pickup");
   const canDraw = myTurn && game.phase === "pickup";
-  $("#availablePlay").innerHTML = game.availablePlay.length
-    ? game.availablePlay.map((card) => cardHtml(card, { pickable: canPickup, disabled: !canPickup })).join("")
-    : '<span class="empty-play">No cards remain in this play</span>';
-  $("#availablePlay").querySelectorAll(".pickable").forEach((element) => {
-    element.addEventListener("click", () => action("pickup", { cardId: element.dataset.cardId }));
-  });
+  renderBoard(game, canPickup);
 
   $("#handPoints").textContent = me.handPoints;
   $("#handCards").innerHTML = me.hand.map((card) => cardHtml(card, {
@@ -194,6 +205,21 @@ function renderGame() {
   renderFeedbackButton();
 }
 
+function renderBoard(game, canPickup = game.currentPlayerId === game.viewerId &&
+  (game.phase === "pickup" || game.phase === "optional-pickup")) {
+  const cards = state.boardDisplay || game.availablePlay || [];
+  const pickupIds = new Set((game.pickupOptions || []).map((card) => card.id));
+  $("#availablePlay").innerHTML = cards.length
+    ? cards.map((card) => {
+      const pickable = canPickup && pickupIds.has(card.id);
+      return cardHtml(card, { pickable, disabled: !pickable });
+    }).join("")
+    : '<span class="empty-play">No cards remain in this play</span>';
+  $("#availablePlay").querySelectorAll(".pickable").forEach((element) => {
+    element.addEventListener("click", () => action("pickup", { cardId: element.dataset.cardId }));
+  });
+}
+
 function renderFeedbackButton() {
   $("#feedbackButton").setAttribute("aria-pressed", String(state.feedbackEnabled));
   $("#feedbackButton").classList.toggle("feedback-muted", !state.feedbackEnabled);
@@ -210,7 +236,7 @@ function ensureAudioContext() {
   return state.audioContext;
 }
 
-function playTone(frequency, duration = 0.08, volume = 0.022, delay = 0, type = "sine") {
+function playTone(frequency, duration = 0.08, volume = 0.038, delay = 0, type = "sine") {
   const context = ensureAudioContext();
   if (!context) return;
   const start = context.currentTime + delay;
@@ -219,7 +245,7 @@ function playTone(frequency, duration = 0.08, volume = 0.022, delay = 0, type = 
   oscillator.type = type;
   oscillator.frequency.setValueAtTime(frequency, start);
   gain.gain.setValueAtTime(0.0001, start);
-  gain.gain.exponentialRampToValueAtTime(volume, start + 0.012);
+  gain.gain.exponentialRampToValueAtTime(Math.min(volume * 1.7, 0.075), start + 0.012);
   gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
   oscillator.connect(gain);
   gain.connect(context.destination);
@@ -295,6 +321,30 @@ function startReconnectTicker() {
   }, 1000);
 }
 
+function startTurnTicker() {
+  if (state.turnTicker) return;
+  state.turnTicker = setInterval(() => {
+    const game = state.data?.game;
+    if (!game || game.status !== "playing" || game.phase === "round-end") return;
+    updateTurnTimers(game);
+  }, 250);
+}
+
+function updateTurnTimers(game) {
+  const duration = game.turnDurationMs || 90_000;
+  const remaining = Math.max(0, duration - (Date.now() - game.turnStartedAt));
+  const ratio = Math.max(0, Math.min(1, remaining / duration));
+  document.querySelectorAll(".table-seat").forEach((seat) => {
+    const active = seat.dataset.playerId === game.currentPlayerId;
+    seat.style.setProperty("--turn-remaining", active ? ratio : 1);
+    const timer = seat.querySelector(".turn-timer");
+    if (timer) {
+      timer.classList.toggle("turn-timer-active", active);
+      timer.setAttribute("aria-valuenow", String(Math.ceil(active ? remaining / 1000 : duration / 1000)));
+    }
+  });
+}
+
 function renderSeats(game) {
   const visiblePlayers = game.players.filter((player) => !player.left);
   const viewerIndex = visiblePlayers.findIndex((player) => player.id === game.viewerId);
@@ -322,10 +372,16 @@ function renderSeats(game) {
         ? "Sitting out"
         : reconnecting
           ? `Reconnecting ${reconnectSeconds}s`
-          : `${player.cardCount} cards`;
+          : player.id === game.currentPlayerId
+            ? "Playing"
+            : "Waiting";
+    const visualCards = Array.from({ length: player.cardCount }, (_, cardIndex) =>
+      `<i style="--card-index:${cardIndex};--card-count:${player.cardCount}"></i>`
+    ).join("");
     return `
       <div class="table-seat ${player.id === game.currentPlayerId ? "current-seat" : ""} ${isOut ? "seat-out" : ""} ${reconnecting ? "seat-reconnecting" : ""}"
         data-player-id="${player.id}" style="--seat-x:${x}%;--seat-y:${y}%">
+        <div class="seat-card-fan" aria-label="${player.cardCount} cards">${visualCards}</div>
         <div class="seat-avatar">
           ${escapeHtml(player.name.slice(0, 1).toUpperCase())}
           ${player.reentryUsed ? '<span class="reentry-badge" title="Re-entry used">R</span>' : ""}
@@ -333,12 +389,11 @@ function renderSeats(game) {
         <div class="seat-details">
           <strong>${escapeHtml(player.name)}${player.id === game.viewerId ? ' <em>YOU</em>' : ""}</strong>
           <span>${stateLabel}</span>
-        </div>
-        <div class="seat-card-stack" aria-label="${player.cardCount} cards">
-          <i></i><i></i><i></i><b>${player.cardCount}</b>
+          <div class="turn-timer" role="progressbar" aria-label="Turn time remaining" aria-valuemin="0" aria-valuemax="90" aria-valuenow="90"><i></i></div>
         </div>
       </div>`;
   }).join("");
+  updateTurnTimers(game);
 }
 
 function renderScoreTable(game) {
@@ -485,6 +540,10 @@ function returnHome() {
   state.hasReceivedState = false;
   clearInterval(state.reconnectTicker);
   state.reconnectTicker = null;
+  clearInterval(state.turnTicker);
+  state.turnTicker = null;
+  clearTimeout(state.boardRevealTimer);
+  state.boardRevealTimer = null;
   clearSession();
   toggleScorePanel(false);
   showScreen("#homeScreen");
