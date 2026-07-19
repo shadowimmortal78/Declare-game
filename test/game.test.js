@@ -9,6 +9,7 @@ const {
   pickupCard,
   endTurn,
   declare,
+  publicState,
   createDeck,
   handPoints,
   isValidPlay,
@@ -146,12 +147,10 @@ test("the joker rank changes every round", () => {
     { id: "two", name: "Two" }
   ], {}, () => 0.5);
   const firstJoker = game.wildRank;
-  const finalCard = card("2");
-  game.players[0].hand = [finalCard];
+  game.players[0].hand = [card("2")];
   game.players[1].hand = [card("K")];
-  game.availablePlay = [card("7")];
-
-  playCards(game, "one", [finalCard.id]);
+  game.turnsCompleted = 2;
+  declare(game, "one");
 
   assert.equal(game.phase, "round-end");
   assert.equal(game.roundResult.winnerId, "one");
@@ -160,24 +159,49 @@ test("the joker rank changes every round", () => {
   assert.notEqual(game.wildRank, firstJoker);
 });
 
-test("an empty hand scores zero while opponents score their remaining hands", () => {
+test("an empty hand may only declare on its next turn", () => {
   const game = createGame([
     { id: "one", name: "One" },
     { id: "two", name: "Two" }
   ], { pointLimit: 100, reentryEnabled: false }, () => 0.5);
-  const winningCard = card("2");
-  game.players[0].hand = [winningCard];
-  game.players[1].hand = [card("K")];
-  game.availablePlay = [card("7")];
+  const firstZero = card("6", "hearts");
+  const secondZero = card("6", "clubs");
+  game.players[0].hand = [firstZero];
+  game.players[1].hand = [secondZero];
+  game.availablePlay = [card("6", "spades")];
 
-  playCards(game, "one", [winningCard.id]);
+  playCards(game, "one", [firstZero.id]);
+  assert.equal(game.phase, "optional-pickup");
+  assert.equal(game.scoreHistory.length, 0);
+  endTurn(game, "one");
+  assert.equal(game.currentPlayerIndex, 1);
 
-  assert.equal(game.players[0].score, 0);
-  assert.equal(game.players[1].score, 10);
-  assert.equal(game.scoreHistory[0].deltas.one, 0);
-  assert.equal(game.scoreHistory[0].deltas.two, 10);
-  advanceRound(game);
-  assert.equal(game.round, 2);
+  playCards(game, "two", [secondZero.id]);
+  endTurn(game, "two");
+  assert.equal(game.currentPlayerIndex, 0);
+  declare(game, "one");
+
+  assert.equal(game.players[0].score, -5);
+  assert.equal(game.players[1].score, 0);
+  assert.equal(game.scoreHistory[0].deltas.one, -5);
+  assert.equal(game.scoreHistory[0].deltas.two, 0);
+});
+
+test("other players see a pending play before the active player commits the turn", () => {
+  const game = createGame([
+    { id: "one", name: "One" },
+    { id: "two", name: "Two" }
+  ], {}, () => 0.5);
+  const previous = card("4", "clubs");
+  const played = card("8", "hearts");
+  game.availablePlay = [previous];
+  game.players[0].hand = [played, card("K")];
+
+  playCards(game, "one", [played.id]);
+  assert.deepEqual(publicState(game, "one").availablePlay, [previous]);
+  assert.deepEqual(publicState(game, "two").availablePlay, [played]);
+  assert.deepEqual(publicState(game, "one").pickupOptions, [previous]);
+  assert.deepEqual(publicState(game, "two").pickupOptions, []);
 });
 
 test("a successful declaration gives the declarer minus five", () => {
@@ -193,6 +217,8 @@ test("a successful declaration gives the declarer minus five", () => {
 
   assert.equal(game.players[0].score, -5);
   assert.equal(game.players[1].score, 5);
+  assert.equal(game.scoreHistory[0].deltas.one, -5);
+  assert.equal(game.scoreHistory[0].deltas.two, 5);
 });
 
 test("the lowest challenger defeats a declaration", () => {
@@ -211,6 +237,9 @@ test("the lowest challenger defeats a declaration", () => {
   assert.equal(game.players[0].score, 30);
   assert.equal(game.players[1].score, -3);
   assert.equal(game.players[2].score, 8);
+  assert.equal(game.scoreHistory[0].deltas.one, 30);
+  assert.equal(game.scoreHistory[0].deltas.two, -3);
+  assert.equal(game.scoreHistory[0].deltas.three, 8);
 });
 
 test("sitting out greys a player from future turns while preserving their seat", () => {
