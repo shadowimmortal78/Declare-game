@@ -41,9 +41,11 @@ Jokers may substitute for cards in groups or sequences, but a sequence cannot co
 3. The cards just played become available to the next player.
 4. Picking up a card ends the turn immediately.
 
-If a player empties their hand, the round ends immediately. That player has a
-hand value of 0 and receives 0 points for the round. Every other active player
-adds the value of their remaining hand to their cumulative score.
+Emptying a hand does not end the round immediately. The player must finish the
+current turn normally, including any required pickup. If their hand is still
+worth 0 when their next turn begins, they may declare then. This gives every
+other active player one final turn. Another player who also reaches 0 during
+that cycle scores 0 if the first player's declaration succeeds.
 
 ## Empty Draw Deck
 
