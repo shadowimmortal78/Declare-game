@@ -9,6 +9,7 @@ const CARD_POINTS = {
   A: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7,
   8: 8, 9: 9, 10: 10, J: 10, Q: 10, K: 10
 };
+const TURN_DURATION_MS = 90_000;
 
 function id(prefix = "id") {
   return `${prefix}_${crypto.randomBytes(8).toString("hex")}`;
@@ -154,6 +155,8 @@ function createGame(players, settings = {}, random = Math.random) {
     startingPlayerIndex: 0,
     currentPlayerIndex: 0,
     turnsCompleted: 0,
+    turnStartedAt: null,
+    turnDurationMs: TURN_DURATION_MS,
     phase: "play",
     deck: [],
     discard: [],
@@ -164,6 +167,7 @@ function createGame(players, settings = {}, random = Math.random) {
     lastAction: null,
     actionSequence: 0,
     scoreHistory: [],
+    roundStartingScores: {},
     roundResult: null,
     winnerId: null,
     random
@@ -189,8 +193,10 @@ function startRound(game, previousEvent = "") {
       for (let count = 0; count < 7; count += 1) player.hand.push(game.deck.pop());
     }
   }
+  game.roundStartingScores = Object.fromEntries(game.players.map((player) => [player.id, player.score]));
   game.availablePlay = [game.deck.pop()];
   game.currentPlayerIndex = game.startingPlayerIndex;
+  game.turnStartedAt = Date.now();
   const roundEvent = `Round ${game.round} began. ${game.players[game.currentPlayerIndex].name} plays first.`;
   game.lastEvent = previousEvent ? `${previousEvent} ${roundEvent}` : roundEvent;
 }
@@ -217,15 +223,6 @@ function playCards(game, playerId, cardIds) {
   game.lastEvent = `${player.name} played ${cards.length} card${cards.length === 1 ? "" : "s"}.`;
   recordAction(game, "play", player.id, { cardIds: cards.map((card) => card.id), cards });
 
-  if (player.hand.length === 0) {
-    finishRound(game, {
-      type: "empty",
-      playerIndex: game.currentPlayerIndex,
-      winnerIndex: game.currentPlayerIndex,
-      title: `${player.name} emptied their hand`
-    });
-    return;
-  }
   game.phase = skipPickup ? "optional-pickup" : "pickup";
   if (skipPickup) {
     game.lastEvent += " The play connected. They may end their turn or pick up from the previous play.";
@@ -281,6 +278,7 @@ function completeTurn(game) {
   game.turnsCompleted += 1;
   game.currentPlayerIndex = nextActiveIndex(game, game.currentPlayerIndex);
   game.phase = "play";
+  game.turnStartedAt = Date.now();
   game.lastEvent += ` ${game.players[game.currentPlayerIndex].name}'s turn.`;
 }
 
@@ -355,7 +353,6 @@ function declare(game, playerId) {
 }
 
 function finishRound(game, result) {
-  const scoresBefore = new Map(game.players.map((player) => [player.id, player.score]));
   if (!result.scoresApplied) {
     for (const index of activePlayerIndexes(game)) {
       game.players[index].score += handPoints(game.players[index].hand, game.wildRank);
@@ -384,7 +381,7 @@ function finishRound(game, result) {
 
   const deltas = Object.fromEntries(game.players.map((player) => [
     player.id,
-    player.score - scoresBefore.get(player.id)
+    player.score - (game.roundStartingScores[player.id] ?? 0)
   ]));
   const winner = Number.isInteger(result.winnerIndex) ? game.players[result.winnerIndex] : null;
   const historyEntry = {
@@ -434,6 +431,7 @@ function sitOutPlayer(game, playerId) {
     game.currentPlayerIndex = nextActiveIndex(game, playerIndex);
     game.phase = "play";
     game.pendingPlay = [];
+    game.turnStartedAt = Date.now();
     game.lastEvent += ` ${game.players[game.currentPlayerIndex].name}'s turn.`;
   }
 }
@@ -457,10 +455,15 @@ function publicState(game, viewerId) {
     pointLimit: game.pointLimit,
     reentryEnabled: game.reentryEnabled,
     currentPlayerId: game.players[game.currentPlayerIndex]?.id || null,
+    turnStartedAt: game.turnStartedAt,
+    turnDurationMs: game.turnDurationMs,
     phase: game.phase,
     wildRank: game.wildRank,
     deckCount: game.deck.length,
-    availablePlay: game.availablePlay,
+    availablePlay: game.pendingPlay.length > 0 && game.players[game.currentPlayerIndex]?.id !== viewerId
+      ? game.pendingPlay
+      : game.availablePlay,
+    pickupOptions: game.players[game.currentPlayerIndex]?.id === viewerId ? game.availablePlay : [],
     lastEvent: game.lastEvent,
     lastAction: game.lastAction,
     scoreHistory: game.scoreHistory,
